@@ -1,0 +1,21 @@
+function [ u ] = BicycleToPoseControl( xTrue,xGoal )
+%Computes a control to reach a pose for bicycle
+%   xTrue is the robot current pose : [ x y theta ]'
+%   xGoal is the goal point
+%   u is the control : [v phi]'
+
+% TODO 
+kp = 20;
+ka = 5;
+kb = -4;
+
+p = sqrt((xTrue(1,1) - xGoal(1,1))^2 + (xTrue(2,1) - xGoal(2,1))^2);
+alpha = atan2((xGoal(2,1) - xTrue(2,1)),(xGoal(1,1) - xTrue(1,1))) - xTrue(3,1);
+alpha = AngleWrap(alpha);
+beta = xGoal(3,1) - atan2((xGoal(2,1) - xTrue(2,1)),(xGoal(1,1) - xTrue(1,1)));
+beta = AngleWrap(beta);
+   
+u(2,1) = ka * alpha + kb * beta;
+u(1,1) = kp * p;
+end
+
