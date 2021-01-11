@@ -1,0 +1,188 @@
+"""
+ Simple 2D ICP implementation
+ author: David Filliat
+"""
+
+import numpy as np
+from scipy.spatial import KDTree
+from scipy.spatial.distance import cdist
+import math
+
+# A few helper function
+
+def angle_wrap(a):
+    """
+    Keep angle between -pi and pi
+    """
+    return np.fmod(a + np.pi, 2*np.pi ) - np.pi
+
+
+def mean_angle(angleList):
+    """
+    Compute the mean of a list of angles
+    """
+
+    mcos = np.mean(np.cos(angleList))
+    msin = np.mean(np.sin(angleList))
+
+    return math.atan2(msin, mcos)
+
+
+def icp(model, data, maxIter, thres, dist_thres, percent):
+    """
+    ICP (iterative closest point) algorithm
+    Simple ICP implementation for teaching purpose
+    - input
+    model : scan taken as the reference position
+    data : scan to align on the model
+    maxIter : maximum number of ICP iterations
+    thres : threshold to stop ICP when correction is smaller
+    - output
+    R : rotation matrix
+    t : translation vector
+    meandist : mean point distance after convergence
+    """
+
+    print('Running ICP, ', end='')
+
+    # Various inits
+    olddist = float("inf")  # residual error
+    maxRange = 10  # limit on the distance of points used for ICP
+
+    # Create array of x and y coordinates of valid readings for reference scan
+    valid = model["ranges"] < maxRange
+    ref = np.array([model["x"], model["y"]])
+    ref = ref[:, valid]
+
+    # Create array of x and y coordinates of valid readings for processed scan
+    valid = data["ranges"] < maxRange
+    dat = np.array([data["x"], data["y"]])
+    dat = dat[:, valid]
+
+    # ----------------------- TODO ------------------------
+    # Filter data points too close to each other
+    # Put the result in dat_filt
+    # dist_thres = 0.06
+    num_points = dat.shape[1]
+    is_key_point=[False for i in range(num_points)]
+    print("Before filter, total {} points".format(num_points))
+    dat_t = np.transpose(dat)
+    dist = cdist(dat_t, dat_t, 'euclidean')
+    # for i in range(num_points):
+    #     num_isolated_points = np.sum(dist[i,i:] > dist_thres)
+    #     if num_isolated_points==num_points-i-1:
+    #         is_key_point[i]=True
+    i = 0
+    for it in range(dat_t.shape[0]):
+        len_next = list(np.where(dist[i, i:] > dist_thres))[0]
+        is_key_point[i] = True
+        if len_next.shape[0] > 0:
+            i = len_next[0] + i
+        else:
+            break
+    dat_filt = dat[:, is_key_point]
+    print("After filter, total {} points".format(dat_filt.shape[1]))
+
+    # Initialize transformation to identity
+    R = np.eye(2)
+    t = np.zeros((2, 1))
+
+    # Main ICP loop
+    for iter in range(maxIter):
+        ## KNN
+        # ----- Find nearest Neighbors for each point, using kd-trees for speed
+        # tree = KDTree(ref.T)
+        # distance, index = tree.query(dat_filt.T)
+        # meandist = np.mean(distance)
+        # dat_matched = []
+        # new_index = []
+        # index_set = set(index)
+        # for i in index_set:
+        #     ind = np.where(index == i)[0]
+        #     min_dis_ind = np.argmin(distance[ind])
+        #     temp_dat = dat_filt[:, ind[min_dis_ind]]
+        #     dat_matched.append(temp_dat)
+        #     new_index.append(i)
+        #
+        # dat_matched = np.array(dat_matched).T
+        # index = np.array(new_index)
+
+        tree = KDTree(ref.T)
+        distance, index = tree.query(ref.T, k=2)
+
+        dat_matched = []
+        new_index = []
+        min_dis=1000
+        vector = ref[:, index[:, 1]] - ref[:, index[:, 0]]  # 2xn
+        for i in range(dat_filt.shape[1]):
+            dat_i = dat_filt[:, i].reshape(2, 1)
+            product = np.abs(np.sum((ref - dat_i) * vector, axis=0))  # calculate the cosine
+            ind = np.argmin(product)
+
+            if product[ind] < min_dis:
+                min_dis=product[ind]
+                new_index=[ind]
+                dat_matched=[dat_filt[:, i]]
+
+        index = np.array(new_index)
+        dat_matched = np.array(dat_matched).T
+        x = ref[:, index] - dat_matched
+        meandist = np.squeeze(x.T@x)
+
+        # meandist = sum(distance1) / len(distance1)
+
+        # print("total {} matched".format(index.shape))
+
+        # ----------------------- TODO ------------------------
+        # filter points matchings, keeping only the closest ones
+        # you have to modify :
+        # - 'dat_matched' with the points
+        # - 'index' with the corresponding point index in ref
+
+        # dat_matched = []
+        # new_index=[]
+        # percent_match=percent
+        # temp_distance=distance.copy()
+        # temp_distance.sort()
+        # # find top percent matchings
+        # num_best_match=int(len(distance)*percent_match)
+        # distance_threshold=temp_distance[num_best_match]
+        # for i in range(len(distance)):
+        #     if distance[i]<distance_threshold:
+        #         dat_matched.append(dat_filt[:,i])
+        #         new_index.append(index[i])
+        #
+        # dat_matched=np.array(dat_matched).T
+        # index=np.array(new_index)
+
+        # dat_matched=dat_filt
+        # ----- Compute transform
+
+        # Compute point mean
+        mdat = np.mean(dat_matched, 1)
+        mref = np.mean(ref[:, index], 1)
+
+        # Use SVD for transform computation
+        C = np.transpose(dat_matched.T-mdat) @ (ref[:, index].T - mref)
+        u, s, vh = np.linalg.svd(C)
+        Ri = vh.T @ u.T
+        Ti = mref - Ri @ mdat
+
+        # Apply transformation to points
+        dat_filt = Ri @ dat_filt
+        dat_filt = np.transpose(dat_filt.T + Ti)
+
+        # Update global transformation
+        R = Ri @ R
+        t = Ri @ t + Ti.reshape(2, 1)
+
+        # Stop when no more progress
+        if abs(olddist-meandist) < thres:
+            break
+
+        # store mean residual error to check progress
+        olddist = meandist
+
+    print("finished with mean point corresp. error {:f}".format(meandist))
+
+    return R, t, meandist
